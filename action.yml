@@ -1,0 +1,135 @@
+name: "Scan Nix code with codeql-nix"
+description: "Run the codeql-nix extractor and queries, then upload SARIF to GitHub code scanning."
+author: "Jamie Magee"
+branding:
+  icon: search
+  color: blue
+
+inputs:
+  source-root:
+    description: "Directory containing the Nix code to scan."
+    required: false
+    default: "."
+  query-suite:
+    description: |
+      CodeQL query suite to run. One of:
+        - "code-scanning" (default) — the curated codeql-nix code-scanning suite
+        - a path to a .qls file
+        - a single .ql file
+    required: false
+    default: "code-scanning"
+  category:
+    description: "SARIF category used to disambiguate analyses in the Security tab."
+    required: false
+    default: "codeql-nix"
+  version:
+    description: |
+      Version of codeql-nix to use (a `vX.Y.Z` tag, or `latest`).
+    required: false
+    default: "latest"
+  upload:
+    description: "Whether to upload SARIF to GitHub code scanning."
+    required: false
+    default: "true"
+  output:
+    description: "Path to write the SARIF file to (default: ./codeql-nix-results.sarif)."
+    required: false
+    default: "codeql-nix-results.sarif"
+
+outputs:
+  sarif-file:
+    description: "Path of the produced SARIF file."
+    value: ${{ steps.analyze.outputs.sarif-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install CodeQL CLI
+      shell: bash
+      run: |
+        set -euo pipefail
+        bundle_dir="$RUNNER_TEMP/codeql-bundle"
+        if [[ ! -d "$bundle_dir" ]]; then
+          mkdir -p "$bundle_dir"
+          gh release download --repo github/codeql-action \
+            --pattern 'codeql-bundle-linux64.tar.zst' \
+            --dir "$bundle_dir"
+          tar --use-compress-program='zstd -d' -xf "$bundle_dir/codeql-bundle-linux64.tar.zst" -C "$bundle_dir"
+        fi
+        echo "$bundle_dir/codeql" >> "$GITHUB_PATH"
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Download codeql-nix extractor pack
+      shell: bash
+      run: |
+        set -euo pipefail
+        pack_dir="$RUNNER_TEMP/codeql-nix-pack"
+        mkdir -p "$pack_dir"
+        version="${{ inputs.version }}"
+        if [[ "$version" == "latest" ]]; then
+          tag=$(gh release view --repo JamieMagee/codeql-nix --json tagName --jq .tagName)
+        else
+          tag="$version"
+        fi
+        asset="codeql-extractor-nix-${tag}-linux64.tar.gz"
+        gh release download "$tag" \
+          --repo JamieMagee/codeql-nix \
+          --pattern "$asset" \
+          --dir "$pack_dir"
+        tar -xzf "$pack_dir/$asset" -C "$pack_dir"
+        echo "EXTRACTOR_PACK=$pack_dir/extractor-pack" >> "$GITHUB_ENV"
+
+        # The query packs live inside the codeql-nix repo's ql/ directory. We
+        # need them too, fetched at the same tag.
+        ql_dir="$RUNNER_TEMP/codeql-nix-ql"
+        rm -rf "$ql_dir"
+        git clone --depth=1 --branch "$tag" https://github.com/JamieMagee/codeql-nix.git "$ql_dir"
+        echo "QL_PACKS_DIR=$ql_dir/ql" >> "$GITHUB_ENV"
+      env:
+        GH_TOKEN: ${{ github.token }}
+
+    - name: Install QL pack dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        ( cd "$QL_PACKS_DIR/lib" && codeql pack install )
+        ( cd "$QL_PACKS_DIR/src" && codeql pack install )
+
+    - name: Create CodeQL database
+      shell: bash
+      run: |
+        set -euo pipefail
+        db="$RUNNER_TEMP/codeql-nix-db"
+        rm -rf "$db"
+        codeql database create "$db" \
+          --language=nix \
+          --source-root="${{ inputs.source-root }}" \
+          --search-path="$EXTRACTOR_PACK" \
+          --threads=0
+        echo "CODEQL_DB=$db" >> "$GITHUB_ENV"
+
+    - name: Analyze
+      id: analyze
+      shell: bash
+      run: |
+        set -euo pipefail
+        suite="${{ inputs.query-suite }}"
+        if [[ "$suite" == "code-scanning" ]]; then
+          suite="$QL_PACKS_DIR/src/codeql-suites/nix-code-scanning.qls"
+        fi
+        codeql database analyze "$CODEQL_DB" \
+          --search-path="$EXTRACTOR_PACK" \
+          --additional-packs="$QL_PACKS_DIR" \
+          "$suite" \
+          --format=sarif-latest \
+          --output="${{ inputs.output }}" \
+          --threads=0
+        echo "sarif-file=${{ inputs.output }}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload SARIF to GitHub code scanning
+      if: inputs.upload == 'true'
+      uses: github/codeql-action/upload-sarif@fee9466b8957867761f2d78f922ab084e3e2dd17 # v3
+      with:
+        sarif_file: ${{ inputs.output }}
+        category: ${{ inputs.category }}

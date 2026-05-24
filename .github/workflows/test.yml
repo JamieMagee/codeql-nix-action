@@ -32,3 +32,17 @@ jobs:
         with:
           source-root: nix
           category: codeql-nix-smoke-test
+          upload: "false"
+
+      - name: Verify SARIF was produced
+        run: |
+          set -euo pipefail
+          ls -la codeql-nix-results.sarif
+          jq -r '"Rules with findings: " + (.runs[0].results | map(.ruleId) | unique | length | tostring)' codeql-nix-results.sarif
+          jq -r '.runs[0].results | length as $n | "Total findings: \($n)"' codeql-nix-results.sarif
+          # The testbed contains 2 planted unpinned fetches; expect >=2 findings.
+          n=$(jq -r '.runs[0].results | length' codeql-nix-results.sarif)
+          if [[ "$n" -lt 2 ]]; then
+            echo "Expected >=2 findings on the testbed, got $n"
+            exit 1
+          fi

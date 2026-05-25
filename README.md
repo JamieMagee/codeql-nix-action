@@ -47,7 +47,8 @@ repository.
 | Input | Default | Description |
 |---|---|---|
 | `source-root` | `.` | Directory containing the `.nix` files to scan. |
-| `query-suite` | `code-scanning` | Either `code-scanning` for the curated suite, or a path to a `.qls` / `.ql` file inside the workflow checkout. |
+| `query-suite` | `code-scanning` | Either `code-scanning`, `code-quality`, or a path to a `.qls` / `.ql` file inside the workflow checkout. |
+| `enable-quality` | `false` | When `true`, also runs the `code-quality` suite (Phase 3a `nixpkgs-hammering` ports) alongside whatever `query-suite` is selected. |
 | `category` | `codeql-nix` | SARIF category — distinguishes this analysis in the Security tab if you upload multiple. |
 | `version` | `latest` | `vX.Y.Z` tag of [codeql-nix](https://github.com/JamieMagee/codeql-nix/releases) to use, or `latest`. |
 | `upload` | `true` | If `false`, skips the SARIF upload step. The SARIF is still produced at the `output` path. |

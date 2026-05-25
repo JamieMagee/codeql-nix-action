@@ -13,11 +13,20 @@ inputs:
   query-suite:
     description: |
       CodeQL query suite to run. One of:
-        - "code-scanning" (default) — the curated codeql-nix code-scanning suite
+        - "code-scanning" (default) — the curated codeql-nix security/correctness suite
+        - "code-quality" — the nixpkgs-hammering-style style/quality lints
         - a path to a .qls file
         - a single .ql file
     required: false
     default: "code-scanning"
+  enable-quality:
+    description: |
+      If "true", also runs the `code-quality` suite (Phase 3a
+      nixpkgs-hammering ports). Findings from both suites are uploaded
+      to the same SARIF file under the same category. Default is "false"
+      so existing pipelines see no change.
+    required: false
+    default: "false"
   category:
     description: "SARIF category used to disambiguate analyses in the Security tab."
     required: false
@@ -117,11 +126,21 @@ runs:
         suite="${{ inputs.query-suite }}"
         if [[ "$suite" == "code-scanning" ]]; then
           suite="$QL_PACKS_DIR/src/codeql-suites/nix-code-scanning.qls"
+        elif [[ "$suite" == "code-quality" ]]; then
+          suite="$QL_PACKS_DIR/src/codeql-suites/nix-code-quality.qls"
         fi
+
+        # When enable-quality=true, also run the code-quality suite alongside
+        # whatever query-suite the user picked.
+        extra_suite=""
+        if [[ "${{ inputs.enable-quality }}" == "true" && "$suite" != *"nix-code-quality.qls" ]]; then
+          extra_suite="$QL_PACKS_DIR/src/codeql-suites/nix-code-quality.qls"
+        fi
+
         codeql database analyze "$CODEQL_DB" \
           --search-path="$EXTRACTOR_PACK" \
           --additional-packs="$QL_PACKS_DIR" \
-          "$suite" \
+          "$suite" $extra_suite \
           --format=sarif-latest \
           --output="${{ inputs.output }}" \
           --threads=0
